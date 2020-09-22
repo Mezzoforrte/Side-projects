@@ -1,0 +1,8 @@
+
+TEST 2a): MatMult() between 2x3 and 3x2 array
+
+0  7  14  7  21  
+0  7  14  7  21  
+0  7  14  7  21  
+0  7  14  7  21  
+0  7  14  7  21  
