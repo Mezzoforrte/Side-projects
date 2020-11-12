@@ -47,6 +47,8 @@ General usage: features:
 09/22/2020 - Version 1.0.
     - number set of files all at once according to alphabetical order.
     - edit names of set of files all at once
+11/11/2020 - Version 2.0
+    - Fixed memory leaks with valgrind
 *********************************************************/
 
 
@@ -63,8 +65,8 @@ General usage: features:
 #include <errno.h>
 
 
-#include "../lib/Common/Common.h"
-#include "../lib/Batchdock.h"
+#include "lib/Common/Common.h"
+#include "lib/Batchdock.h"
 
 
 #define MIN_SEL 1
@@ -91,6 +93,7 @@ char* trimwhitespace(int flag, const char* rawstring){              // Trims lea
         }
 
         refinedstring = new char[strlen(bufferstring)-iteration+1];
+
         std::strcpy(refinedstring, leadch);             // copies from where the iterator stops to refinedstring. this WILL copy just the \0 char.
     }
       // Trim trailing space.
@@ -109,7 +112,7 @@ char* trimwhitespace(int flag, const char* rawstring){              // Trims lea
     }
 
     return (refinedstring);
-}
+}//! LEAK during operations.
 
 char* validateFlags(char* inputFlags, char* validFlags = nullptr){  // checks inputFlags against validFlags to see if valid.
                                                                     // Returns list of valid flags. Any invalid flag --> return (0).
@@ -130,7 +133,11 @@ char* validtokenbeforeEqual(char* prior, char* argument){       //! checks if to
 
     else{
         char totaltoken[strlen(argument)];
-        std::strcpy(totaltoken, trimwhitespace(1, argument));       // trims leading whitespace
+        char* nowhitespace = trimwhitespace(1, argument);
+        std::strcpy(totaltoken, nowhitespace);       // trims leading whitespace
+
+            // cleanup
+        delete nowhitespace;
 
         char* firsttoken = std::strtok(totaltoken, "=");
 
@@ -145,6 +152,8 @@ char* validtokenbeforeEqual(char* prior, char* argument){       //! checks if to
             if (strlen(firsttoken)+1 != strlen(totaltoken))            // for case of "prior="
                 return(std::strtok(NULL, ""));
         }
+
+
         return ("\0");
     }
 }
@@ -173,6 +182,7 @@ void setPositiontoMax(char** position, const char* targetstring){     // sets th
         char* noargsposition = new char[numDigits(std::strlen(targetstring))];
         std::strcpy(noargsposition, std::to_string(std::strlen(targetstring)).c_str());
         (*position) = noargsposition;
+        delete noargsposition;
 }
 
 bool alphalowercmp(ENTRY_RECORD& first, ENTRY_RECORD& second){       // COMPARATOR object for alphabetically sorting the set of strings w/o rt to upper/lower case
@@ -286,12 +296,17 @@ std::string dock::regparser(STRING_IT target, char* first, char* second, char* t
                 iteration = 1;                   // checks if all target files are numbered
 
         }
+
+            // clean up
+        delete validExpression;
+
     }
 
     else if (!strcmp(first, "replaceall")) {                    // case: replaceall
 
             // place args into vector for iteration purposes
-        std::vector<char*> copiedargs;
+
+        std::vector<char*> copiedargs;                          // non-owning copy of arguments
         typedef std::vector<char*>::reverse_iterator CHAR_IT;   // defining reverse iterator for parsing arguments
 
         int totalargs = 0;                                // counter keeps track of number of total arguments
@@ -317,7 +332,7 @@ std::string dock::regparser(STRING_IT target, char* first, char* second, char* t
 
             // declaring processedargs container
 
-        std::vector<char*> processedargs(4);            // 0 = processedflags, 1 = processedregexp, 2 = processedposition, 3 = processednochar
+        std::vector<char*> processedargs(4);            // non-owning; 0 = processedflags, 1 = processedregexp, 2 = processedposition, 3 = processednochar
 
             // by default, processedargs initialized to NULL
         processedargs[0] = nullptr;
@@ -335,7 +350,7 @@ std::string dock::regparser(STRING_IT target, char* first, char* second, char* t
 
                 // function vector declared for purpose of argument parsing
 
-          typedef std::vector<char *(*)(char*, char*)> FUNC_CONT;
+          typedef std::vector<char *(*)(char*, char*)> FUNC_CONT;       // do not delete function pointers
           typedef typename FUNC_CONT::reverse_iterator FUNC_IT;
 
 
@@ -351,8 +366,8 @@ std::string dock::regparser(STRING_IT target, char* first, char* second, char* t
           FUNC_CONT argumentsparse;
           argumentsparse.push_back(validateFlags);
           argumentsparse.push_back(validateExpression);
-          argumentsparse.push_back(validposbeforeEqual);            // validposbeforeEqual
-          argumentsparse.push_back(validcharbeforeEqual);          // validcharsbeforeEqual
+          argumentsparse.push_back(validposbeforeEqual);           // validposbeforeEqual; automatically deleted
+          argumentsparse.push_back(validcharbeforeEqual);          // validcharsbeforeEqual; automatically deleted
 
 
           FUNC_IT tracking_It = argumentsparse.rbegin();
@@ -379,14 +394,14 @@ std::string dock::regparser(STRING_IT target, char* first, char* second, char* t
                         }
                     }
                     else if ((*fptr_It) == validateExpression){
-                        if (processedargs[1] = (*fptr_It)(*args_it, 0)){           // apply function to argument; if there's a hit. ...
+                        if (processedargs[1] = (*fptr_It)(*args_it, 0)){     // apply function to argument; if there's a hit. ...
                             tracking_It = argumentsparse.rbegin()+3;         // setting function for next argument to start at validateFlags
                             trueargs++;                                      // also need to increment number of true args
                         }
                     }
                     else if((*fptr_It) == validateFlags){
-                        if (processedargs[0] = (*fptr_It)(*args_it, 0)){           // apply function to argument; if there's a hit. ...
-                            tracking_It = argumentsparse.rend();                       // we need to update our most recent iterator
+                        if (processedargs[0] = (*fptr_It)(*args_it, 0)){     // apply function to argument; if there's a hit. ...
+                            tracking_It = argumentsparse.rend();             // we need to update our most recent iterator
                             trueargs++;                                      // also need to increment number of true args
                         }
                     }
@@ -412,13 +427,16 @@ std::string dock::regparser(STRING_IT target, char* first, char* second, char* t
 
                     // final replacing string statement
                 newstring.replace(std::atoi(processedargs[2]), std::atoi(processedargs[3]), std::string(processedargs[1]));
+
+                    // cleanup
+                delete processedargs[1];
             }
 
           }
 
 
 
-                // valid iff validflags && validregexp && "position=typename INT" && "iterations=typename INT"
+            // valid iff validflags && validregexp && "position=typename INT" && "iterations=typename INT"
 
 
             // return (*target).replace(position, nochars, std::regex(regexp));  // dangerous method; replaces no matter what.
@@ -433,8 +451,6 @@ std::string dock::regparser(STRING_IT target, char* first, char* second, char* t
 
 
 };
-
-
 
 void dock::alphasort(std::vector<ENTRY_RECORD>& entries, std::string parameter) {      // sorts dock by given parameter
 
@@ -479,7 +495,7 @@ bool dock::addfiles(const char* _dirpath) {     // addfile to current "container
 
 
                 // processing dirpath (prior to opening the directory) to include extra '/' at the end [TESTED]
-    char* processed_dirpath = new char[strlen(_dirpath)+2];  // allocate storage for new dir name
+    char* processed_dirpath = new char[strlen(_dirpath)+2];  // allocate storage for new dir name; make_unique
     strcpy(processed_dirpath, _dirpath);                     // copying name to buffer
 
     processed_dirpath[strlen(_dirpath)] = '/';
@@ -490,15 +506,16 @@ bool dock::addfiles(const char* _dirpath) {     // addfile to current "container
 
     if (tempdir == 0){                 // checks if reading in filestream was successful. If not, error message, and nothing is done.
         std::cout << "Invalid directory path provided." << std::endl;
+        delete processed_dirpath;
     }
     else{
         if (dir != 0)            // checks if a directory is already opened.
             closefile();         // "closes" currently open file and declares if any changes are pending.
-
-        dir = tempdir;                    // ... then sets the directory to the valid temp directory.
+                                 //! deletes previous new file
+        this->dir = tempdir;                    // ... then sets the directory to the valid temp directory.
 
                 // saving the new directory name
-        dirpath = processed_dirpath;
+        this->dirpath = processed_dirpath;
 
                 // reading in directory
         dirent* temp;           // Dirent represents a file; temp is "buffer dirent" used for processing
@@ -537,11 +554,15 @@ bool dock::addfiles(const char* _dirpath) {     // addfile to current "container
         changesapplied = 0;
     }
 
+
+
     return(dir);          // returns 0 if addfile not successful
 }
 
 void dock::closefile(){
-    dir = nullptr;
+    closedir(dir);                  // closes directory stream  //! leak fixed
+    dir = nullptr;                  // deletes dirpathname string
+
     delete dirpath;                 // deletes the string allocated for storing file name
     dirpath = nullptr;              // sets dirpath to nullptr
 
@@ -551,7 +572,7 @@ void dock::closefile(){
 void dock::editall(char* first, char* second, char* third, char* fourth, char* fifth) {
     // first = action, second = options, third = regexp, fourth = pos, fifth = characters
 
-    char* extraargument5 = fifth;                                // variable for passing "extra argument" to regparser, by case of need.
+    char* extraargument5 = fifth;                        // variable for passing "extra argument" to regparser, by case of need.
 
     std::vector<ENTRY_RECORD> temp_vector;               // temporary buffer vector to simultaneously sort both the origname & newname by a specified total order on the set of newnames.
 
@@ -561,6 +582,7 @@ void dock::editall(char* first, char* second, char* third, char* fourth, char* f
             extraargument5 = new char[11+i.length()];
             std::strcpy(extraargument5, "iterations=");
             std::strcat(extraargument5, i.c_str());                     // [TEMP]
+            delete extraargument5;
         }
         else {   };         // reserved for future arguments
 
@@ -585,6 +607,7 @@ void dock::editall(char* first, char* second, char* third, char* fourth, char* f
             extraargument5 = new char[11+i.length()];
             std::strcpy(extraargument5, "iterations=");
             std::strcat(extraargument5, i.c_str());                     // [TEMP]
+            delete extraargument5;
         }
         else {   };  // reserved for future arguments
 
@@ -607,9 +630,10 @@ void dock::editall(char* first, char* second, char* third, char* fourth, char* f
     else {                                               // all files / directories
         if (!strcmp(first, "numberall")){                // preprocessing for numberall
             std::string i = std::to_string(n);
-            extraargument5 = new char[11+i.length()];
+            extraargument5 = new char[11+i.length()];           //! LEAK fixed??
             std::strcpy(extraargument5, "iterations=");
             std::strcat(extraargument5, i.c_str());
+            delete extraargument5;
         }
         else {   };  // reserved for future arguments
 
@@ -620,8 +644,6 @@ void dock::editall(char* first, char* second, char* third, char* fourth, char* f
         temp_it < tempnames[stack_index].end(); temp_it++, orig_it++){
         temp_vector.emplace_back(std::make_pair((*orig_it), regparser(temp_it, first, second, third, fourth, extraargument5)));
     }
-
-
 
                         // checks if changes are applied
 
@@ -742,7 +764,6 @@ int dock::command_parser(char* command){
     commandcopy[commandlength+1] = '\0';
     strcpy(commandcopy, command);
 
-
     if (commandlength > 0){                // check for case where nothing is entered
         int i = 0;                         // counter for iterating through whitespace in
 
@@ -760,8 +781,10 @@ int dock::command_parser(char* command){
     else
         token.push_back(command);
 
-    while (token.size() < 5){                   // ensures no NULL arguments when checked, by setting all argument slots to '\0'
-        char* temp = new char[1];
+    int noargs = token.size();
+
+    while (token.size() < 5){           // ensures no NULL arguments when checked, by setting all argument slots to '\0'
+        char* temp = new char[1];       //! LEAK fixed!!
         temp[0] = '\0';
         token.push_back(temp);
     };
@@ -769,7 +792,22 @@ int dock::command_parser(char* command){
     if (!strcmp(token[0], "open")){
             addfiles(token[1]);                // passes argument to addfiles; doesn't do anything if the filepath is invalid.
             displaydock();
+
+        for (std::vector<char*>::iterator token_it = token.begin()+noargs; token_it != token.end(); token_it++){
+            delete (*(token_it));
+        }
             return(1);
+    }
+
+    else if (!strcmp(token[0], "exit")){
+            closefile();
+
+                // clean-up (deallocate) vector of char_ptr arguments
+            for (std::vector<char*>::iterator token_it = token.begin()+noargs; token_it != token.end(); token_it++){
+                delete (*(token_it));
+            }
+
+            return (EXITPROG);
     }
 
     if (dir == 0)
@@ -806,12 +844,15 @@ int dock::command_parser(char* command){
             applychanges();
             displaydock();
         }
-        else if (!strcmp(token[0], "exit")){
-            return (EXITPROG);
-        }
+
         else {
                 std::cout << "Invalid option." << std::endl;
         }
+    }
+
+        // clean-up (deallocate) vector of char_ptr arguments
+    for (std::vector<char*>::iterator token_it = token.begin()+noargs; token_it != token.end(); token_it++){
+        delete (*(token_it));
     }
 
     return(0);
